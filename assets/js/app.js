@@ -27,6 +27,72 @@ function textToHtml(text) {
   return escapeHtml(text).replace(/\r?\n/g, '<br>');
 }
 
+
+
+function mdToHtml(src) {
+  const esc = escapeHtml(src || '');
+  const lines = esc.split(/\r?\n/);
+  let html = '';
+  let listOpen = false;
+  const closeList = () => { if (listOpen) { html += '</ul>'; listOpen = false; } };
+  const inline = (s) => s
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+
+  lines.forEach((line) => {
+    const t = line.trim();
+    const m = t.match(/^(#{1,6})\s+(.*)$/);
+    if (m) {
+      closeList();
+      const lv = m[1].length;
+      html += `<h${lv}>${inline(m[2])}</h${lv}>`;
+      return;
+    }
+    if (t === '```') {
+      if (html.includes('<pre><code>') && !html.endsWith('</code></pre>')) {
+        html += '</code></pre>';
+      } else {
+        closeList();
+        html += '<pre><code>';
+      }
+      return;
+    }
+    if (html.includes('<pre><code>') && !html.endsWith('</code></pre>')) {
+      html += line + '\n';
+      return;
+    }
+    if (/^(\s*[-*])\s+/.test(t)) {
+      if (!listOpen) { html += '<ul>'; listOpen = true; }
+      html += `<li>${inline(t.replace(/^\s*[-*]\s+/, ''))}</li>`;
+      return;
+    }
+    if (/^\s*\d+\.\s+/.test(t)) {
+      if (!listOpen) { html += '<ul>'; listOpen = true; }
+      html += `<li>${inline(t.replace(/^\s*\d+\.\s+/, ''))}</li>`;
+      return;
+    }
+    if (/^>\s?/.test(t)) {
+      closeList();
+      html += `<blockquote>${inline(t.replace(/^>\s?/, ''))}</blockquote>`;
+      return;
+    }
+    if (t === '---' || t === '***') {
+      closeList();
+      html += '<hr>';
+      return;
+    }
+    closeList();
+    if (t !== '') html += `<p>${inline(t)}</p>`;
+  });
+  closeList();
+  if (html.includes('<pre><code>') && !html.includes('</code></pre>')) html += '</code></pre>';
+  return html;
+}
+
 function fmtTime(ts) {
   if (!ts) return '';
   const d = new Date(ts * 1000);
@@ -68,6 +134,7 @@ const state = {
   user: null,
   boards: [],
   boardId: localStorage.getItem('cm3.board') || 'all',
+  searchQuery: '',
   posts: [],
   postsTotal: 0,
   postsOffset: 0,
@@ -88,6 +155,7 @@ const DEFAULT_SETTINGS = {
   bgImage: '',            // 背景图 dataURL
   bgBlur: 0,              // 背景模糊度
   themeColor: '#6b8bff',  // 主题色
+  navStyle: 'sticky',     // sticky | floating
 };
 
 function loadSettings() {
@@ -115,6 +183,8 @@ function applySettings() {
   rootStyle.setProperty('--primary', settings.themeColor);
   rootStyle.setProperty('--primary-2', settings.themeColor);
   rootStyle.setProperty('--primary-soft', `color-mix(in srgb, ${settings.themeColor} 16%, transparent)`);
+
+  document.body.classList.toggle('nav-floating', settings.navStyle === 'floating');
 
   const bg = $('#bgLayer');
   if (bg) {
@@ -163,7 +233,6 @@ function headerHTML() {
         <span>CoedmTan<small>第三方编程猫社区</small></span>
       </a>
       <div class="topbar-right">
-        <button class="btn btn-ghost" id="settingsBtn" onclick="openSettings()">设置</button>
         ${userArea}
       </div>
     </div>
@@ -178,12 +247,15 @@ let settingsPanel = 'general';
 function openSettings() {
   let overlay = $('#settingsOverlay');
   if (!overlay) {
-    const gearIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M4.9 4.9l2.1 2.1m10 10 2.1 2.1M4.9 19.1l2.1-2.1m10-10 2.1-2.1"/></svg>`;
+    const gearIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
     const paintIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18c1.5 0 2-1 1.5-2s-.5-2 1-2H17a4 4 0 0 0 4-4c0-5-4-10-9-10z"/><circle cx="7.5" cy="10.5" r="1.1"/><circle cx="12" cy="7.5" r="1.1"/><circle cx="16" cy="10.5" r="1.1"/></svg>`;
+    const infoIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="17"/><circle cx="12" cy="7.5" r="1"/></svg>`;
     const genActive = settingsPanel === 'general' ? ' active' : '';
     const appActive = settingsPanel === 'appearance' ? ' active' : '';
     const genCurrent = settingsPanel === 'general' ? ' aria-current="page"' : '';
     const appCurrent = settingsPanel === 'appearance' ? ' aria-current="page"' : '';
+    const aboutActive = settingsPanel === 'about' ? ' active' : '';
+    const aboutCurrent = settingsPanel === 'about' ? ' aria-current="page"' : '';
     const html = `<div class="settings-overlay hidden" id="settingsOverlay">
       <div class="settings-stage">
         <nav class="nav-rail" aria-label="设置导航">
@@ -200,12 +272,28 @@ function openSettings() {
                 <span class="label">外观</span>
               </button>
             </li>
+            <li>
+              <button type="button" class="nav-item${aboutActive}" data-panel="about"${aboutCurrent}>
+                <span class="icon-wrap">${infoIcon}</span>
+                <span class="label">关于</span>
+              </button>
+            </li>
           </ul>
         </nav>
         <div class="settings-modal">
           <div class="settings-content">
             <header class="settings-header">
-              <h3 id="settingsTitle">设置</h3>
+              <nav class="settings-breadcrumb" aria-label="设置位置">
+                <span>设置</span>
+                <span class="crumb-arrow">›</span>
+                <strong id="settingsCrumb">通用</strong>
+              </nav>
+              <div class="settings-search">
+                <span class="settings-search-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+                </span>
+                <input type="search" placeholder="搜索设置" aria-label="搜索设置">
+              </div>
               <button class="settings-close" id="settingsClose" type="button">&times;</button>
             </header>
             <div class="settings-panel" id="settingsPanel"></div>
@@ -227,8 +315,8 @@ function closeSettings() {
 function renderSettings() {
   const overlay = $('#settingsOverlay');
   if (!overlay) return;
-  const title = $('#settingsTitle');
-  if (title) title.textContent = settingsPanel === 'general' ? '设置 · 通用' : '设置 · 外观';
+  const crumb = $('#settingsCrumb');
+  if (crumb) crumb.textContent = settingsPanel === 'general' ? '通用' : (settingsPanel === 'appearance' ? '外观' : '关于');
   $$('.nav-item[data-panel]', overlay).forEach((btn) => {
     const active = btn.dataset.panel === settingsPanel;
     btn.classList.toggle('active', active);
@@ -237,8 +325,52 @@ function renderSettings() {
   });
   const panel = $('#settingsPanel');
   if (!panel) return;
-  panel.innerHTML = settingsPanel === 'general' ? settingsGeneralHTML() : settingsAppearanceHTML();
+  const inner = settingsPanel === 'general' ? settingsGeneralHTML() : (settingsPanel === 'appearance' ? settingsAppearanceHTML() : settingsAboutHTML());
+  const metaIcons = {
+    general: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+    appearance: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18c1.5 0 2-1 1.5-2s-.5-2 1-2H17a4 4 0 0 0 4-4c0-5-4-10-9-10z"/><circle cx="7.5" cy="10.5" r="1.1"/><circle cx="12" cy="7.5" r="1.1"/><circle cx="16" cy="10.5" r="1.1"/></svg>',
+    about: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="17"/><circle cx="12" cy="7.5" r="1"/></svg>',
+  };
+  const meta = {
+    general: { title: '通用', desc: '配置帖子刷新、自动加载等交互行为。', icon: metaIcons.general },
+    appearance: { title: '外观', desc: '配置页面背景、模糊度与网站主题色。', icon: metaIcons.appearance },
+    about: { title: '关于', desc: '项目介绍、开源地址与友情链接。', icon: metaIcons.about },
+  }[settingsPanel] || { title: '设置', desc: '', icon: '' };
+  panel.innerHTML = `
+    <header class="settings-section-heading" data-settings-title="${escapeHtml(meta.title)}">
+      <span class="section-icon-dot">${meta.icon}</span>
+      <span class="settings-section-heading__content">
+        <h2>${escapeHtml(meta.title)}</h2>
+        <p>${escapeHtml(meta.desc)}</p>
+      </span>
+    </header>
+    ${inner}`;
   bindSettingsEvents();
+  if (settingsPanel === 'appearance') loadPresetBackgrounds();
+}
+
+function settingsAboutHTML() {
+  return `
+    <div class="setting-group">
+      <h4>关于 CoedmTan</h4>
+      <div class="setting-card">
+        <p class="card-desc" style="margin-bottom:8px">CoedmTan 是一个第三方编程猫社区论坛前端，采用简洁的深色界面，支持浏览帖子、发帖、回帖、评论、回复、搜索、深色/毛玻璃外观设置等功能。项目通过编程猫社区开放 API 与官方数据交互，所有敏感请求由 PHP 后端代理处理。</p>
+        <p class="card-desc" style="margin-bottom:0">如果喜欢这个项目，欢迎到 GitHub 点个Star✨ ，查看源码、提出建议或参与维护。</p>
+      </div>
+    </div>
+    <div class="setting-group">
+      <h4>开源地址</h4>
+      <div class="setting-card">
+        <a href="https://github.com/Creat319/codem-tan" target="_blank" rel="noopener noreferrer" style="word-break:break-all">https://github.com/Creat319/codem-tan</a>
+      </div>
+    </div>
+    <div class="setting-group">
+      <h4>友情链接</h4>
+      <div class="setting-card">
+        <a href="https://archive.fumizuki.space" target="_blank" rel="noopener noreferrer">CodeMao 社区论坛帖子归档</a>
+        <div class="muted" style="margin-top:6px;font-size:12.5px">archive.fumizuki.space</div>
+      </div>
+    </div>`;
 }
 
 function settingsGeneralHTML() {
@@ -290,6 +422,7 @@ function settingsAppearanceHTML() {
     <div class="setting-group">
       <h4>页面背景</h4>
       <div class="setting-card">
+        <div class="preset-title">自定义上传背景</div>
         <div class="bg-upload-row">
           <label class="file-btn">选择背景图片<input type="file" id="bgFile" accept="image/*"></label>
           <button class="clear-btn" id="clearBg" type="button">清除背景</button>
@@ -299,6 +432,31 @@ function settingsAppearanceHTML() {
           <span style="white-space:nowrap">图片模糊度</span>
           <input type="range" id="bgBlur" min="0" max="24" step="1" value="${Number(settings.bgBlur) || 0}">
           <span class="muted" id="bgBlurValue" style="width:52px;text-align:right">${Number(settings.bgBlur) || 0}px</span>
+        </div>
+      </div>
+      <div class="setting-card">
+        <div class="preset-title">预设背景</div>
+        <div class="preset-grid" id="presetGrid"><span class="muted">加载中…</span></div>
+      </div>
+    </div>
+    <div class="setting-group">
+      <h4>网站导航栏</h4>
+      <div class="setting-card">
+        <div class="radio-row">
+          <label class="radio-option">
+            <input type="radio" name="navStyle" value="sticky" ${settings.navStyle === 'floating' ? '' : 'checked'}>
+            <span>
+              <span class="opt-title">固定在顶部</span>
+              <span class="opt-desc">导航栏贴住页面顶部，随页面滚动保持置顶</span>
+            </span>
+          </label>
+          <label class="radio-option">
+            <input type="radio" name="navStyle" value="floating" ${settings.navStyle === 'floating' ? 'checked' : ''}>
+            <span>
+              <span class="opt-title">悬浮式导航栏</span>
+              <span class="opt-desc">横向长方形导航栏悬浮在页面顶部，带圆角和间距</span>
+            </span>
+          </label>
         </div>
       </div>
     </div>
@@ -311,6 +469,32 @@ function settingsAppearanceHTML() {
         </div>
       </div>
     </div>`;
+}
+
+async function loadPresetBackgrounds() {
+  const grid = $('#presetGrid');
+  if (!grid) return;
+  try {
+    const data = await api('/api/backgrounds');
+    const urls = data.items || [];
+    if (!urls.length) {
+      grid.innerHTML = '<span class="muted">暂无可用的预设背景</span>';
+      return;
+    }
+    grid.innerHTML = urls.map((url) => {
+      const active = settings.bgImage === url ? ' active' : '';
+      return `<button type="button" class="preset-item${active}" data-url="${escapeHtml(url)}" style="background-image:url('${escapeHtml(url)}')"></button>`;
+    }).join('');
+    $$('.preset-item', grid).forEach((btn) => {
+      btn.onclick = () => {
+        settings.bgImage = btn.dataset.url;
+        saveSettings();
+        renderSettings();
+      };
+    });
+  } catch (e) {
+    grid.innerHTML = '<span class="muted">预设背景加载失败</span>';
+  }
 }
 
 function bindSettingsEvents() {
@@ -336,6 +520,13 @@ function bindSettingsEvents() {
       saveSettings();
       renderSettings();
       refreshHomeFooter();
+    };
+  });
+
+  $$('input[name="navStyle"]', overlay).forEach((radio) => {
+    radio.onchange = () => {
+      if (radio.checked) settings.navStyle = radio.value;
+      saveSettings();
     };
   });
 
@@ -415,7 +606,294 @@ function refreshHomeFooter() {
 window.openSettings = openSettings;
 window.closeSettings = closeSettings;
 
-/* ---------- login ---------- */
+/* ---------- composer: publish post ---------- */
+let composerFormat = 'markdown';
+let composerBoardId = '';
+let composerPreviewOpen = false;
+
+async function openComposer() {
+  if (!state.user) {
+    toast('请先登录', true);
+    return;
+  }
+  if (!state.boards.length) {
+    try {
+      const data = await api('/api/boards');
+      const real = (data.items || []).filter((b) => b && b.name);
+      state.boards = [{ id: 'all', name: '全部', icon_url: '', is_all: true }, ...real];
+    } catch (e) {
+      toast(e.message, true);
+      return;
+    }
+  }
+  let overlay = $('#composerOverlay');
+  if (!overlay) {
+    const html = `<div class="composer-overlay hidden" id="composerOverlay">
+      <div class="composer-modal">
+        <header class="composer-header">
+          <h3>发布帖子</h3>
+          <button class="settings-close" id="composerClose" type="button">&times;</button>
+        </header>
+        <div class="composer-body">
+          <div class="field">
+            <label>选择板块</label>
+            <div class="board-picker" id="composerBoardWrap">
+              <button type="button" class="board-picker-current" id="composerBoardCurrent">
+                <span class="board-picker-icon" id="composerBoardCurrentIcon"></span>
+                <span id="composerBoardCurrentName">选择板块</span>
+                <span class="board-picker-arrow">›</span>
+              </button>
+              <div class="board-picker-list" id="composerBoardList"></div>
+            </div>
+          </div>
+          <div class="field">
+            <label for="composerTitle">标题</label>
+            <input id="composerTitle" maxlength="80" placeholder="请输入帖子标题">
+          </div>
+          <div class="field">
+            <div class="editor-toolbar">
+              <div class="editor-tabs">
+                <button type="button" class="editor-tab active" data-format="markdown">Markdown</button>
+                <button type="button" class="editor-tab" data-format="html">HTML</button>
+              </div>
+              <button type="button" class="preview-toggle" id="composerPreviewToggle">预览</button>
+            </div>
+            <div class="md-editor">
+              <textarea id="composerContent" rows="9" placeholder="支持 Markdown，也可以切换到 HTML 直接编写"></textarea>
+              <div class="md-preview hidden" id="composerPreview"></div>
+            </div>
+          </div>
+          <div class="composer-error hidden" id="composerError"></div>
+        </div>
+        <footer class="composer-footer">
+          <button class="btn btn-ghost" id="composerCancel" type="button">取消</button>
+          <button class="btn btn-primary" id="composerSubmit" type="button">发布</button>
+        </footer>
+      </div>
+    </div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+  }
+  composerFormat = 'markdown';
+  composerPreviewOpen = false;
+  const boards = state.boards.filter((b) => String(b.id) !== 'all');
+  composerBoardId = boards.some((b) => String(b.id) === String(state.boardId))
+    ? state.boardId
+    : (boards[0] ? boards[0].id : '');
+  renderComposerBoardPicker(boards);
+  updateComposerBoardCurrent(boards);
+
+  const title = $('#composerTitle');
+  const content = $('#composerContent');
+  const preview = $('#composerPreview');
+  if (title) title.value = '';
+  if (content) content.value = '';
+  if (preview) {
+    preview.classList.add('hidden');
+    preview.innerHTML = '';
+  }
+  $$('.editor-tab', overlay).forEach((tab) => tab.classList.toggle('active', tab.dataset.format === 'markdown'));
+  const previewToggle = $('#composerPreviewToggle');
+  if (previewToggle) previewToggle.textContent = '预览';
+  const err = $('#composerError');
+  if (err) err.classList.add('hidden');
+  overlay.classList.remove('hidden');
+  bindComposerEvents();
+}
+
+function renderComposerBoardPicker(boards) {
+  const list = $('#composerBoardList');
+  if (!list) return;
+  list.innerHTML = boards.map((b) => `
+    <button type="button" class="board-option" data-board="${escapeHtml(b.id)}">
+      ${boardIconHTML(b)}
+      <span>${escapeHtml(b.name)}</span>
+    </button>
+  `).join('');
+}
+
+function updateComposerBoardCurrent(boards) {
+  const board = boards.find((b) => String(b.id) === String(composerBoardId)) || boards[0];
+  if (!board) return;
+  composerBoardId = board.id;
+  const icon = $('#composerBoardCurrentIcon');
+  const name = $('#composerBoardCurrentName');
+  if (icon) icon.innerHTML = boardIconHTML(board);
+  if (name) name.textContent = board.name;
+}
+
+function updateComposerPreview() {
+  const textarea = $('#composerContent');
+  const preview = $('#composerPreview');
+  if (!textarea || !preview) return;
+  if (!composerPreviewOpen) return;
+  const raw = textarea.value || '';
+  preview.innerHTML = composerFormat === 'markdown' ? mdToHtml(raw) : raw;
+}
+
+function closeComposer() {
+  const overlay = $('#composerOverlay');
+  if (overlay) {
+    overlay.classList.add('hidden');
+    const wrap = $('#composerBoardWrap');
+    if (wrap) wrap.classList.remove('open');
+  }
+}
+
+function bindComposerEvents() {
+  const overlay = $('#composerOverlay');
+  if (!overlay) return;
+  const closeBtn = $('#composerClose', overlay);
+  if (closeBtn) closeBtn.onclick = closeComposer;
+  const cancelBtn = $('#composerCancel', overlay);
+  if (cancelBtn) cancelBtn.onclick = closeComposer;
+  overlay.onclick = (e) => { if (e.target === overlay) closeComposer(); };
+
+  // board picker
+  const boardWrap = $('#composerBoardWrap', overlay);
+  const boardCurrent = $('#composerBoardCurrent', overlay);
+  if (boardWrap && boardCurrent) {
+    boardCurrent.onclick = (e) => {
+      e.stopPropagation();
+      boardWrap.classList.toggle('open');
+    };
+  }
+  const boardList = $('#composerBoardList', overlay);
+  if (boardList) {
+    $$('.board-option', boardList).forEach((opt) => {
+      opt.onclick = () => {
+        composerBoardId = opt.dataset.board;
+        updateComposerBoardCurrent(state.boards.filter((b) => String(b.id) !== 'all'));
+        boardWrap.classList.remove('open');
+      };
+    });
+  }
+  if (!window.__composerDocBound) {
+    document.addEventListener('click', () => {
+      const wrap = $('#composerBoardWrap');
+      if (wrap) wrap.classList.remove('open');
+    });
+    window.__composerDocBound = true;
+  }
+
+  // format tabs / preview
+  $$('.editor-tab', overlay).forEach((tab) => {
+    tab.onclick = () => {
+      composerFormat = tab.dataset.format;
+      $$('.editor-tab', overlay).forEach((t) => t.classList.toggle('active', t === tab));
+      updateComposerPreview();
+    };
+  });
+  const previewToggle = $('#composerPreviewToggle', overlay);
+  if (previewToggle) {
+    previewToggle.onclick = () => {
+      composerPreviewOpen = !composerPreviewOpen;
+      const preview = $('#composerPreview', overlay);
+      if (preview) {
+        preview.classList.toggle('hidden', !composerPreviewOpen);
+        if (composerPreviewOpen) updateComposerPreview();
+      }
+      previewToggle.textContent = composerPreviewOpen ? '隐藏预览' : '预览';
+    };
+  }
+  const contentInput = $('#composerContent', overlay);
+  if (contentInput) contentInput.addEventListener('input', updateComposerPreview);
+
+  const submit = $('#composerSubmit', overlay);
+  if (submit) {
+    submit.onclick = async () => {
+      const boardId = composerBoardId;
+      const raw = ($('#composerContent', overlay).value || '').trim();
+      const title = ($('#composerTitle', overlay).value || '').trim();
+      const content = composerFormat === 'markdown' ? mdToHtml(raw) : raw;
+      const error = $('#composerError', overlay);
+      if (error) error.classList.add('hidden');
+      if (!boardId || boardId === 'all') {
+        if (error) { error.textContent = '请选择要发布的板块'; error.classList.remove('hidden'); }
+        return;
+      }
+      if (!title) {
+        if (error) { error.textContent = '标题不能为空'; error.classList.remove('hidden'); }
+        return;
+      }
+      if (!content) {
+        if (error) { error.textContent = '内容不能为空'; error.classList.remove('hidden'); }
+        return;
+      }
+      submit.disabled = true;
+      submit.textContent = '发布中…';
+      try {
+        const data = await api('/api/publish', {
+          method: 'POST',
+          body: { board_id: boardId, title, content },
+        });
+        closeComposer();
+        toast('发布成功');
+        const id = data.id;
+        if (id) {
+          go('/tie/' + encodeURIComponent(id));
+        } else {
+          state.boardId = boardId;
+          localStorage.setItem('cm3.board', boardId);
+          if (normalizePath() === '/') loadPosts(true);
+        }
+      } catch (err) {
+        if (error) {
+          error.textContent = err.message || '发布失败';
+          error.classList.remove('hidden');
+        } else {
+          toast(err.message, true);
+        }
+      } finally {
+        submit.disabled = false;
+        submit.textContent = '发布';
+      }
+    };
+  }
+}
+
+window.openComposer = openComposer;
+window.closeComposer = closeComposer;
+
+/* ---------- delete: post / reply / comment ---------- */
+async function deletePost(postId) {
+  if (!confirm('确定删除这篇帖子吗？删除后无法恢复。')) return;
+  try {
+    await api('/api/delete_post', { method: 'POST', body: { post_id: postId } });
+    toast('帖子已删除');
+    go('/');
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function deleteReply(replyId) {
+  if (!confirm('确定删除这条回帖吗？删除后无法恢复。')) return;
+  try {
+    await api('/api/delete_reply', { method: 'POST', body: { reply_id: replyId } });
+    toast('回帖已删除');
+    await loadReplies(true);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function deleteComment(replyId, commentId) {
+  if (!confirm('确定删除这条评论/回复吗？删除后无法恢复。')) return;
+  try {
+    await api('/api/delete_comment', { method: 'POST', body: { comment_id: commentId } });
+    toast('评论已删除');
+    if (state.commentsCache[replyId]) delete state.commentsCache[replyId];
+    await loadReplies(true);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+window.deletePost = deletePost;
+window.deleteReply = deleteReply;
+window.deleteComment = deleteComment;
+
+/* ---------- login ---------- *//* ---------- login ---------- */
 function loginHTML() {
   return `<div class="login-wrap">
     <div class="login-card">
@@ -492,11 +970,20 @@ function homeHTML() {
       <div class="home-main">
         <div class="section-head">
           <h2>社区帖子</h2>
-          <span class="muted" id="postCount"></span>
+          <div class="head-actions">
+            <div class="search-box" id="searchBox">
+              <span class="search-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+              </span>
+              <input id="postSearch" class="search-input" type="text" placeholder="搜索帖子标题" autocomplete="off">
+            </div>
+            <span class="muted" id="postCount"></span>
+          </div>
         </div>
         <div id="postsArea"></div>
       </div>
       <aside class="board-side">
+        <button class="publish-btn" onclick="openComposer()">发帖</button>
         <div class="side-title">帖子分类</div>
         <div class="board-tabs" id="boardTabs"></div>
       </aside>
@@ -507,6 +994,9 @@ function homeHTML() {
 async function renderHome() {
   const app = $('#app');
   app.insertAdjacentHTML('beforeend', homeHTML());
+  const searchInput = $('#postSearch');
+  if (searchInput) searchInput.value = state.searchQuery || '';
+  bindPostSearch();
   try {
     if (!state.boards.length) {
       const data = await api('/api/boards');
@@ -525,6 +1015,25 @@ async function renderHome() {
   await loadPosts(true);
 }
 
+function bindPostSearch() {
+  const input = $('#postSearch');
+  if (!input) return;
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const q = (input.value || '').trim();
+    state.searchQuery = q;
+    state.postsOffset = 0;
+    state.posts = [];
+    loadPosts(true);
+  });
+}
+
+function boardIconHTML(b) {
+  if (String(b.id) === 'all') return '<span class="board-all-dot"></span>';
+  if (b.icon_url) return `<img src="${escapeHtml(b.icon_url)}" alt="" onerror="this.style.display='none'">`;
+  return '<span class="board-no-icon"></span>';
+}
+
 function renderBoardTabs() {
   const wrap = $('#boardTabs');
   if (!wrap) return;
@@ -533,18 +1042,16 @@ function renderBoardTabs() {
     return;
   }
   wrap.innerHTML = state.boards.map((b) => {
-    const icon = String(b.id) === 'all'
-      ? '<span class="board-all-dot"></span>'
-      : (b.icon_url
-        ? `<img src="${escapeHtml(b.icon_url)}" alt="" onerror="this.style.display='none'">`
-        : '<span class="board-no-icon"></span>');
     const active = String(b.id) === String(state.boardId) ? ' active' : '';
-    return `<button class="board-tab${active}" data-board="${escapeHtml(b.id)}">${icon}${escapeHtml(b.name)}</button>`;
+    return `<button class="board-tab${active}" data-board="${escapeHtml(b.id)}">${boardIconHTML(b)}${escapeHtml(b.name)}</button>`;
   }).join('');
   $$('.board-tab', wrap).forEach((el) => {
     el.addEventListener('click', () => {
       state.boardId = el.dataset.board;
       localStorage.setItem('cm3.board', state.boardId);
+      state.searchQuery = '';
+      const searchInput = $('#postSearch');
+      if (searchInput) searchInput.value = '';
       renderBoardTabs();
       loadPosts(true);
     });
@@ -635,7 +1142,10 @@ async function loadPosts(reset = true, startOffset = 0) {
     }
   }
   try {
-    const data = await api(`/api/posts?board_id=${encodeURIComponent(state.boardId)}&limit=10&offset=${state.postsOffset}`);
+    const endpoint = state.searchQuery
+      ? `/api/search?title=${encodeURIComponent(state.searchQuery)}&limit=10&offset=${state.postsOffset}`
+      : `/api/posts?board_id=${encodeURIComponent(state.boardId)}&limit=10&offset=${state.postsOffset}`;
+    const data = await api(endpoint);
     const items = data.items || [];
     if (reset) {
       state.posts = items;
@@ -750,6 +1260,7 @@ function renderDetail() {
   if (!area || !state.postDetail) return;
   const d = state.postDetail;
   const user = d.user || {};
+  const isAuthor = state.user && String(user.id) === String(state.user.id);
   const avatar = user.avatar_url || user.avatar || '';
   const avatarImg = avatar
     ? `<img src="${escapeHtml(avatar)}" alt="" onerror="this.style.visibility='hidden'">`
@@ -775,6 +1286,7 @@ function renderDetail() {
             <span>评论：${d.n_comments ?? 0}</span>
           </div>
         </div>
+        ${isAuthor ? `<button class="btn btn-danger btn-sm author-delete" onclick="deletePost('${escapeHtml(d.id)}')">删除帖子</button>` : ''}
       </div>
       <div class="rich-content">${d.content || ''}</div>
     </article>
@@ -855,6 +1367,7 @@ async function loadReplies(reset = true) {
 
 function replyItemHTML(reply, index) {
   const user = reply.user || {};
+  const isAuthor = state.user && String(user.id) === String(state.user.id);
   const avatar = user.avatar_url || user.avatar || '';
   const avatarImg = avatar
     ? `<img src="${escapeHtml(avatar)}" alt="" onerror="this.style.visibility='hidden'">`
@@ -868,6 +1381,7 @@ function replyItemHTML(reply, index) {
         <span class="time">${fmtTime(reply.created_at)}${reply.is_top ? ' · 置顶' : ''}</span>
       </div>
       <button class="link-btn" data-action="reply-form" data-reply="${escapeHtml(reply.id)}">回复</button>
+      ${isAuthor ? `<button class="link-btn danger-link" onclick="deleteReply('${escapeHtml(reply.id)}')">删除</button>` : ''}
     </div>
     <div class="reply-content">${reply.content || ''}</div>
     <div class="comment-zone" data-comments-for="${escapeHtml(reply.id)}"></div>
@@ -918,6 +1432,7 @@ function renderComments(reply, zone) {
 
 function commentHTML(replyId, c) {
   const user = c.user || {};
+  const isAuthor = state.user && String(user.id) === String(state.user.id);
   const avatar = user.avatar_url || user.avatar || '';
   const avatarImg = avatar
     ? `<img src="${escapeHtml(avatar)}" alt="" onerror="this.style.visibility='hidden'">`
@@ -933,6 +1448,7 @@ function commentHTML(replyId, c) {
     <div class="c-body">${c.content || ''}</div>
     <div class="comment-actions">
       <button class="link-btn" data-action="comment-form" data-reply="${escapeHtml(replyId)}" data-comment="${escapeHtml(c.id)}" data-name="${escapeHtml(user.nickname || '')}">回复</button>
+      ${isAuthor ? `<button class="link-btn danger-link" onclick="deleteComment('${escapeHtml(replyId)}','${escapeHtml(c.id)}')">删除</button>` : ''}
     </div>
   </div>`;
 }
@@ -1068,6 +1584,8 @@ async function renderApp() {
 (async function init() {
   document.documentElement.dataset.theme = 'dark';
   applySettings();
+  const edgeSettings = $('#edgeSettings');
+  if (edgeSettings) edgeSettings.addEventListener('click', () => openSettings());
   try {
     const data = await api('/api/session');
     state.user = data.user || null;

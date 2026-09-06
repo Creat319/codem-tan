@@ -246,12 +246,50 @@ function handle_api(): void
             api_json(['ok' => true]);
             break;
 
+        case 'backgrounds':
+            if ($method !== 'GET') {
+                api_json(['ok' => false, 'error' => 'method not allowed'], 405);
+            }
+            $dir = dirname(__DIR__) . '/img/bj';
+            $items = [];
+            if (is_dir($dir)) {
+                $files = scandir($dir);
+                foreach ($files as $file) {
+                    if ($file === '.' || $file === '..') continue;
+                    if (!preg_match('/\.(jpg|jpeg|png|gif|webp)$/i', $file)) continue;
+                    $items[] = '/img/bj/' . rawurlencode($file);
+                }
+            }
+            sort($items);
+            api_json(['items' => $items, 'ok' => true], 200);
+            break;
+
         case 'boards':
             if ($method !== 'GET') {
                 api_json(['ok' => false, 'error' => 'method not allowed'], 405);
             }
             $res = cm_request('GET', '/web/forums/boards/simples/all');
             $body = is_array($res['body']) ? $res['body'] : ['items' => []];
+            $body['ok'] = true;
+            api_json($body, $res['status']);
+            break;
+
+        case 'search':
+            if ($method !== 'GET') {
+                api_json(['ok' => false, 'error' => 'method not allowed'], 405);
+            }
+            $title = trim((string)($query['title'] ?? ''));
+            $limit = max(5, min(30, (int)($query['limit'] ?? 10)));
+            $offset = max(0, (int)($query['offset'] ?? 0));
+            $page = intdiv($offset, $limit) + 1;
+            if ($title === '') {
+                api_json(['ok' => false, 'error' => '请输入搜索关键词'], 400);
+            }
+            $path = '/web/forums/posts/search?title=' . rawurlencode($title) . '&limit=' . $limit . '&page=' . $page;
+            $res = cm_request('GET', $path);
+            $body = is_array($res['body']) ? $res['body'] : ['items' => []];
+            $body['offset'] = $offset;
+            $body['limit'] = $limit;
             $body['ok'] = true;
             api_json($body, $res['status']);
             break;
@@ -343,6 +381,93 @@ function handle_api(): void
             $body = is_array($res['body']) ? $res['body'] : ['items' => []];
             $body['ok'] = true;
             api_json($body, $res['status']);
+            break;
+
+        case 'publish':
+            if ($method !== 'POST') {
+                api_json(['ok' => false, 'error' => 'method not allowed'], 405);
+            }
+            cm_require_login();
+            $input = api_body();
+            $boardId = rawurlencode(trim((string)($input['board_id'] ?? '')));
+            $title = trim((string)($input['title'] ?? ''));
+            $content = trim((string)($input['content'] ?? ''));
+            if ($boardId === '' || $boardId === 'all') {
+                api_json(['ok' => false, 'error' => '请选择要发布的板块'], 400);
+            }
+            if ($title === '') {
+                api_json(['ok' => false, 'error' => '标题不能为空'], 400);
+            }
+            if ($content === '') {
+                api_json(['ok' => false, 'error' => '内容不能为空'], 400);
+            }
+            $res = cm_request('POST', '/web/forums/boards/' . $boardId . '/posts', [
+                'title'   => $title,
+                'content' => $content,
+            ]);
+            $body = is_array($res['body']) ? $res['body'] : [];
+            $body['ok'] = $res['status'] >= 200 && $res['status'] < 300;
+            if (!$body['ok']) {
+                $body['error'] = (string)($body['error_message'] ?? $body['message'] ?? '发帖失败，可能账号未绑定手机号');
+            }
+            api_json($body, $res['status'] >= 400 ? $res['status'] : 200);
+            break;
+
+        case 'delete_post':
+            if ($method !== 'POST') {
+                api_json(['ok' => false, 'error' => 'method not allowed'], 405);
+            }
+            cm_require_login();
+            $input = api_body();
+            $postId = rawurlencode(trim((string)($input['post_id'] ?? '')));
+            if ($postId === '') {
+                api_json(['ok' => false, 'error' => '缺少帖子 id'], 400);
+            }
+            $res = cm_request('DELETE', '/web/forums/posts/' . $postId);
+            $body = is_array($res['body']) ? $res['body'] : [];
+            $body['ok'] = $res['status'] >= 200 && $res['status'] < 300;
+            if (!$body['ok']) {
+                $body['error'] = (string)($body['error_message'] ?? $body['message'] ?? '删除帖子失败');
+            }
+            api_json($body, $res['status'] >= 400 ? $res['status'] : 200);
+            break;
+
+        case 'delete_reply':
+            if ($method !== 'POST') {
+                api_json(['ok' => false, 'error' => 'method not allowed'], 405);
+            }
+            cm_require_login();
+            $input = api_body();
+            $replyId = rawurlencode(trim((string)($input['reply_id'] ?? '')));
+            if ($replyId === '') {
+                api_json(['ok' => false, 'error' => '缺少回帖 id'], 400);
+            }
+            $res = cm_request('DELETE', '/web/forums/replies/' . $replyId);
+            $body = is_array($res['body']) ? $res['body'] : [];
+            $body['ok'] = $res['status'] >= 200 && $res['status'] < 300;
+            if (!$body['ok']) {
+                $body['error'] = (string)($body['error_message'] ?? $body['message'] ?? '删除回帖失败');
+            }
+            api_json($body, $res['status'] >= 400 ? $res['status'] : 200);
+            break;
+
+        case 'delete_comment':
+            if ($method !== 'POST') {
+                api_json(['ok' => false, 'error' => 'method not allowed'], 405);
+            }
+            cm_require_login();
+            $input = api_body();
+            $commentId = rawurlencode(trim((string)($input['comment_id'] ?? '')));
+            if ($commentId === '') {
+                api_json(['ok' => false, 'error' => '缺少评论 id'], 400);
+            }
+            $res = cm_request('DELETE', '/web/forums/comments/' . $commentId);
+            $body = is_array($res['body']) ? $res['body'] : [];
+            $body['ok'] = $res['status'] >= 200 && $res['status'] < 300;
+            if (!$body['ok']) {
+                $body['error'] = (string)($body['error_message'] ?? $body['message'] ?? '删除评论失败');
+            }
+            api_json($body, $res['status'] >= 400 ? $res['status'] : 200);
             break;
 
         case 'reply':
